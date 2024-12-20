@@ -49,6 +49,14 @@ fn main() {
             "#
             .to_string(),
         ),
+        //         Executor::Piston(
+        //             "python".to_string(),
+        //             r#"
+        // import json, sys
+        // print(json.dumps({"action": True, "storage": json.loads(sys.argv[2])}))
+        // "#
+        //             .to_string(),
+        //         ),
     );
 
     let always_defect = Player::new(
@@ -93,22 +101,18 @@ def main(history, storage):
 
     let detective = Player::new(
         "Detective".to_string(),
-        Executor::Lua(
+        Executor::Python(
             r#"
-            function(history, storage)
-                if #history < 4 then
-                    local moves = {true, false, true, true}
-                    return moves[#history + 1], storage
-                else
-                    for _, round in ipairs(history) do
-                        if not round[2] then
-                            return history[#history][2], storage
-                        end
-                    end
-                    return false, storage
-                end
-            end
-            "#
+def main(history, storage):
+    if len(history) < 4:
+        moves = [True, False, True, True]
+        return moves[len(history)], storage
+    else:
+        for round in history:
+            if not round[1]:
+                return history[-1][1], storage
+        return False, storage
+"#
             .to_string(),
         ),
     );
@@ -122,7 +126,7 @@ def main(history, storage):
                 forgiving_tit_for_tat,
                 detective,
             ])
-            .with_rounds(100),
+            .with_rounds(200),
     );
 
     let scores = tournament.run();

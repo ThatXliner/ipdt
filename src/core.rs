@@ -62,6 +62,13 @@ pub enum Executor {
     /// and returns a tuple of 2 values: `action` and `storage`
     Python(String),
     JavaScript(String),
+    /// We use JSON and sys.argv to pass the history and storage
+    /// to the Piston executor. Your program should output
+    /// your next move and storage as a JSON object of
+    /// {action: boolean, storage: string} If your language does not support
+    /// JSON input built-in, well you're screwed
+    /// (language, program)
+    Piston(String, String),
     WASM(String),
 }
 impl Executor {
@@ -209,6 +216,50 @@ impl Executor {
             Executor::WASM(_) => {
                 todo!()
             }
+            Executor::Piston(language, program) => tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(run_piston(language, program, history, storage)),
+        }
+    }
+}
+#[derive(serde::Deserialize)]
+struct Output {
+    action: bool,
+    storage: String,
+}
+async fn run_piston(
+    language: &String,
+    program: &String,
+    history: &[(bool, bool)],
+    storage: String,
+) -> Result<(bool, String), ExecutionError> {
+    let client = piston_rs::Client::new();
+    let executor = piston_rs::Executor::new()
+        .set_language(language)
+        .set_version("*")
+        .add_file(piston_rs::File::default().set_content(program))
+        .add_args(vec![
+            &serde_json::to_string(history).unwrap(),
+            &serde_json::to_string(&storage).unwrap(),
+        ]);
+
+    match client.execute(&executor).await {
+        Ok(response) => {
+            println!("Language: {}", response.language);
+            println!("Version: {}", response.version);
+
+            if let Some(c) = response.compile {
+                println!("Compilation: {}", c.output);
+            }
+
+            println!("Output: {}", response.run.output);
+            let output: Output = serde_json::from_str(&response.run.stdout).unwrap();
+            return Ok((output.action, output.storage));
+        }
+        Err(e) => {
+            return Err(ExecutionError::RuntimeError(e.to_string()));
         }
     }
 }
@@ -330,6 +381,7 @@ impl Tournament {
         Tournament { config }
     }
     pub fn run(&mut self) -> Vec<i32> {
+        // TODO: Multithread this
         let mut scores = vec![0; self.config.players.len()];
         for (i, player1) in self.config.players.iter().enumerate() {
             for (j, player2) in self.config.players.iter().enumerate() {
