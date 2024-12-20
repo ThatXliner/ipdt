@@ -7,7 +7,7 @@
 //     property::Attribute,
 //     Context, JsValue, Source,
 // };
-// #![deny(clippy::unwrap_used, clippy::expect_used)]
+#![deny(clippy::unwrap_used, clippy::expect_used)]
 use mlua::{Function, Lua, LuaSerdeExt};
 use rustpython::InterpreterConfig;
 use rustpython_vm::{
@@ -73,17 +73,26 @@ impl Executor {
         match self {
             Executor::Lua(program) => {
                 let lua = Lua::new();
-                lua.sandbox(true).unwrap();
+                lua.sandbox(true).map_err(|_| {
+                    ExecutionError::InitializationError("Sandboxing failed".to_string())
+                })?;
                 // Set memory to 1GB
-                lua.set_memory_limit(1024 * 1024 * 1024).unwrap();
-                let function: Function = lua.load(program).eval().unwrap();
+                lua.set_memory_limit(1024 * 1024 * 1024).map_err(|_| {
+                    ExecutionError::InitializationError("Memory limit failed".to_string())
+                })?;
+                let function: Function = lua
+                    .load(program)
+                    .eval()
+                    .map_err(|_| ExecutionError::SyntaxError)?;
 
-                return function
+                function
                     .call::<(bool, String)>((
-                        lua.to_value(&history).unwrap(),
-                        lua.to_value(&storage).unwrap(),
+                        #[allow(clippy::expect_used)]
+                        lua.to_value(&history).expect("Could not serialize history"),
+                        #[allow(clippy::expect_used)]
+                        lua.to_value(&storage).expect("Could not serialize storage"),
                     ))
-                    .map_err(|err| ExecutionError::DeserializationError(err.to_string()));
+                    .map_err(|err| ExecutionError::DeserializationError(err.to_string()))
             }
             Executor::Python(program) => {
                 let output: Result<(bool, String), ExecutionError> = PYTHON.with(|interpreter| {
@@ -113,42 +122,52 @@ impl Executor {
                                     .collect::<Vec<PyObjectRef>>(),
                             )
                             .into();
-                        let result = {
-                            let this = function.to_callable().expect("Not a callable").invoke(
-                                FuncArgs::from(vec![args_history, vm.ctx.new_str(storage).into()]),
-                                vm,
-                            );
-                            match this {
-                                Ok(t) => t,
-                                Err(e) => {
-                                    println!(
-                                        "{:?} {:?} {:?} {:?} {:?}",
-                                        e.args().as_slice()[0].get_item("value", vm).unwrap(),
-                                        e.cause(),
-                                        e.context(),
-                                        e.context(),
-                                        e.traceback().unwrap()
-                                    );
-                                    panic!()
-                                }
-                            }
-                        };
-                        let result_tuple = result.downcast::<PyTuple>().unwrap().into_object();
+                        let result = function
+                            .to_callable()
+                            .ok_or(ExecutionError::InitializationError(
+                                "Expected a function".to_string(),
+                            ))
+                            .map(|callable| {
+                                callable.invoke(
+                                    FuncArgs::from(vec![
+                                        args_history,
+                                        vm.ctx.new_str(storage).into(),
+                                    ]),
+                                    vm,
+                                )
+                            })?
+                            .map_err(|_| ExecutionError::RuntimeError("Wtf".to_string()))?;
+                        let result_tuple = result
+                            .downcast::<PyTuple>()
+                            .map_err(|_| {
+                                ExecutionError::DeserializationError(
+                                    "Could not deserialize output into a tuple".to_string(),
+                                )
+                            })?
+                            .into_object();
                         let result_tuple = result_tuple.to_sequence();
                         let action: bool = result_tuple
                             .get_item(0, vm)
-                            .expect("Could not des")
+                            .map_err(|_| {
+                                ExecutionError::DeserializationError("Could not des".to_string())
+                            })?
                             .try_into_value(vm)
-                            .expect("Could not des");
+                            .map_err(|_| {
+                                ExecutionError::DeserializationError("Could not des".to_string())
+                            })?;
                         let new_storage: String = result_tuple
                             .get_item(1, vm)
-                            .expect("Could not des")
+                            .map_err(|_| {
+                                ExecutionError::DeserializationError("Could not des".to_string())
+                            })?
                             .try_into_value(vm)
-                            .expect("Could not des");
+                            .map_err(|_| {
+                                ExecutionError::DeserializationError("Could not des".to_string())
+                            })?;
                         Ok((action, new_storage))
                     })
                 });
-                return output;
+                output
             }
             Executor::JavaScript(_program) => {
                 // let mut context = Context::default();
@@ -278,6 +297,12 @@ impl Default for TournamentConfig {
 
 pub struct Tournament {
     pub config: TournamentConfig,
+}
+
+impl Default for Tournament {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Tournament {
