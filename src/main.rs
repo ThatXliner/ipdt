@@ -69,7 +69,49 @@ def main(history, storage):
             .to_string(),
         ),
     );
+    let forgiving_tit_for_tat = Player::new(
+        "Forgiving Tit for Tat".to_string(),
+        Executor::Lua(
+            r#"
+            function(history, storage)
+                if #history == 0 then
+                    return true, storage
+                elseif #history == 1 then
+                    return history[#history][2], storage
+                else
+                    if not history[#history][2] and not history[#history - 1][2] then
+                        return false, storage
+                    else
+                        return true, storage
+                    end
+                end
+            end
+            "#
+            .to_string(),
+        ),
+    );
 
+    let detective = Player::new(
+        "Detective".to_string(),
+        Executor::Lua(
+            r#"
+            function(history, storage)
+                if #history < 4 then
+                    local moves = {true, false, true, true}
+                    return moves[#history + 1], storage
+                else
+                    for _, round in ipairs(history) do
+                        if not round[2] then
+                            return history[#history][2], storage
+                        end
+                    end
+                    return false, storage
+                end
+            end
+            "#
+            .to_string(),
+        ),
+    );
     let mut tournament = Tournament::with_config(
         TournamentConfig::new()
             .with_players(vec![
@@ -77,6 +119,8 @@ def main(history, storage):
                 grim_trigger,
                 always_cooperate,
                 always_defect,
+                forgiving_tit_for_tat,
+                detective,
             ])
             .with_rounds(100),
     );
