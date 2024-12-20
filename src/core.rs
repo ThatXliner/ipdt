@@ -16,12 +16,6 @@ use rustpython_vm::{
 
 use crate::error::ExecutionError;
 
-// use serde::{Deserialize, Serialize};
-
-// static PYTHON: LazyLock = LazyLock::new(|| {
-//
-//     interpreter
-// });
 thread_local! {
     pub static PYTHON: Interpreter = {
         // let mut settings = Settings::default();
@@ -47,6 +41,14 @@ thread_local! {
 }
 /// This enum represents the different player-agents
 /// that can play in the tournament
+/// The `history` parameter will always be a list of tuples
+/// where each tuple contains 2 boolean values representing
+/// the actions of (you, them) in the previous rounds
+/// The `storage` parameter will be a string that can be used
+/// to store any information between rounds
+/// The return value of the function should be a tuple of 2 values
+/// where the first value is a boolean representing the action of the player
+/// and the second value is a string representing the storage value
 #[derive(Clone, Debug)]
 pub enum Executor {
     /// Lua programs must only contain ae
@@ -67,7 +69,7 @@ impl Executor {
     // true = cooperate, false = defect
     pub fn run(
         &self,
-        history: Vec<(bool, bool)>,
+        history: &[(bool, bool)],
         storage: String,
     ) -> Result<(bool, String), ExecutionError> {
         match self {
@@ -114,8 +116,8 @@ impl Executor {
                                     .map(|(you, them)| {
                                         vm.ctx
                                             .new_tuple(vec![
-                                                vm.ctx.new_bool(you).into(),
-                                                vm.ctx.new_bool(them).into(),
+                                                vm.ctx.new_bool(*you).into(),
+                                                vm.ctx.new_bool(*them).into(),
                                             ])
                                             .into()
                                     })
@@ -228,7 +230,7 @@ impl Player {
         self.storage = storage;
         self
     }
-    pub fn run(&mut self, history: Vec<(bool, bool)>) -> bool {
+    pub fn run(&mut self, history: &[(bool, bool)]) -> bool {
         let Ok((action, storage)) = self.executor.run(history, self.storage.clone()) else {
             todo!()
         };
@@ -275,22 +277,35 @@ impl TournamentConfig {
         self.loss_score = score;
         self
     }
+    /// Modeled after https://ncase.me/trust/
+    /// (higher the better)
+    pub fn with_nick_style_score(mut self) -> TournamentConfig {
+        self.mutual_win_score = 2;
+        self.mutual_loss_score = 0;
+        self.win_score = 3;
+        self.loss_score = -1;
+        self
+    }
+    /// Modeled after the classic prisoner scenario scores
+    /// (lower the better)
+    pub fn with_classic_style_score(mut self) -> TournamentConfig {
+        self.mutual_win_score = 1;
+        self.mutual_loss_score = 2;
+        self.win_score = 0;
+        self.loss_score = 3;
+        self
+    }
 }
 impl Default for TournamentConfig {
     fn default() -> TournamentConfig {
         TournamentConfig {
             players: vec![],
             rounds: 100,
-            // Modeled after https://ncase.me/trust/
+            // Default to Nick style
             mutual_win_score: 2,
             mutual_loss_score: 0,
             win_score: 3,
             loss_score: -1,
-            // Classic IPDT scores (prisoner scenario)
-            // mutual_win_score: 1,
-            // mutual_loss_score: 2,
-            // win_score: 0,
-            // loss_score: 3,
         }
     }
 }
@@ -324,9 +339,11 @@ impl Tournament {
                 }
                 let mut player1 = player1.clone();
                 let mut player2 = player2.clone();
+                let mut player1_history = vec![];
+                let mut player2_history = vec![];
                 for _ in 0..self.config.rounds {
-                    let player1_action = player1.run(vec![]);
-                    let player2_action = player2.run(vec![]);
+                    let player1_action = player1.run(&player1_history);
+                    let player2_action = player2.run(&player2_history);
                     let player1_score = if player1_action && player2_action {
                         self.config.mutual_win_score
                     } else if !player1_action && !player2_action {
@@ -347,6 +364,8 @@ impl Tournament {
                     };
                     scores[i] += player1_score;
                     scores[j] += player2_score;
+                    player1_history.push((player1_action, player2_action));
+                    player2_history.push((player2_action, player1_action));
                 }
             }
         }
