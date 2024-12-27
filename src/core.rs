@@ -8,11 +8,15 @@
 //     Context, JsValue, Source,
 // };
 #![deny(clippy::unwrap_used, clippy::expect_used)]
+
 use mlua::{Function, Lua, LuaSerdeExt};
 use rustpython::InterpreterConfig;
 use rustpython_vm::{
     builtins::PyTuple, convert::IntoObject, function::FuncArgs, Interpreter, PyObjectRef, Settings,
 };
+use serde_json::Value;
+use wasmer::{imports, Instance, Module, Store};
+use wasmer::{Function as WASMFunction, Value as WASMValue};
 
 use crate::error::ExecutionError;
 
@@ -214,6 +218,42 @@ impl Executor {
                 todo!()
             }
             Executor::WASM(_) => {
+                // let module_wat = r#"
+                // (module
+                //   (type $t0 (func (param i32) (result i32)))
+                //   (func $add_one (export "add_one") (type $t0) (param $p0 i32) (result i32)
+                //     local.get $p0
+                //     i32.const 1
+                //     i32.add))
+                // "#;
+
+                // let mut store = Store::default();
+                // let module = Module::new(&store, &module_wat).map_err(|_| {
+                //     ExecutionError::InitializationError("Could not initialize WASM module".into())
+                // })?;
+                // // The module doesn't import anything, so we create an empty import object.
+                // let import_object = imports! {};
+                // let instance =
+                //     Instance::new(&mut store, &module, &import_object).map_err(|_| {
+                //         ExecutionError::InitializationError("Could not initialize WASM".to_string())
+                //     })?;
+
+                // let main = instance.exports.get_function("main").map_err(|_| {
+                //     ExecutionError::InitializationError("Could not get main function".to_string())
+                // })?;
+                // main.call(
+                //     &mut store,
+                //     &[WASMValue::FuncRef(Some(WASMFunction::new_typed(
+                //         &mut store,
+                //         |index: usize, which: bool| {
+                //             if which {
+                //                 history[index].0
+                //             } else {
+                //                 history[index].1
+                //             }
+                //         },
+                //     )))],
+                // );
                 todo!()
             }
             Executor::Piston(language, program) => tokio::runtime::Builder::new_current_thread()
