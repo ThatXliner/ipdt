@@ -4,10 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-boa_engine = "0.20.0"
 clap = "4.5.23"
 mlua = { version = "0.10.2", features = ["luau", "serialize"] }
-piston_rs = "0.4.3"
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
+webpki-roots = "1.0.10"
+rustls-webpki = "0.103.16"
 rustpython = "0.4.0"
 rustpython-stdlib = "0.4.0"
 rustpython-vm = "0.4.0"
@@ -15,4 +16,3 @@ serde = { version = "1.0.216", features = ["derive"] }
 serde_json = "1.0.133"
 thiserror = "2.0.8"
 tokio = "1.42.0"
-wasmer = "5.0.4"

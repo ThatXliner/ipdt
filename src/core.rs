@@ -15,8 +15,6 @@ use rustpython_vm::{
     builtins::PyTuple, convert::IntoObject, function::FuncArgs, Interpreter, PyObjectRef, Settings,
 };
 use serde_json::Value;
-use wasmer::{imports, Instance, Module, Store};
-use wasmer::{Function as WASMFunction, Value as WASMValue};
 
 use crate::error::ExecutionError;
 
@@ -269,23 +267,67 @@ struct Output {
     action: bool,
     storage: String,
 }
+#[derive(serde::Deserialize)]
+struct PistonResponse {
+    language: String,
+    version: String,
+    compile: Option<PistonProcess>,
+    run: PistonProcess,
+}
+
+#[derive(serde::Deserialize)]
+struct PistonProcess {
+    output: String,
+    stdout: String,
+}
+
 async fn run_piston(
     language: &String,
     program: &String,
     history: &[(bool, bool)],
     storage: String,
 ) -> Result<(bool, String), ExecutionError> {
-    let client = piston_rs::Client::new();
-    let executor = piston_rs::Executor::new()
-        .set_language(language)
-        .set_version("*")
-        .add_file(piston_rs::File::default().set_content(program))
-        .add_args(vec![
-            &serde_json::to_string(history).unwrap(),
-            &serde_json::to_string(&storage).unwrap(),
-        ]);
+    run_piston_at(
+        "https://emkc.org/api/v2/piston/execute",
+        language,
+        program,
+        history,
+        storage,
+    )
+    .await
+}
 
-    match client.execute(&executor).await {
+async fn run_piston_at(
+    endpoint: &str,
+    language: &String,
+    program: &String,
+    history: &[(bool, bool)],
+    storage: String,
+) -> Result<(bool, String), ExecutionError> {
+    let request = serde_json::json!({
+        "language": language,
+        "version": "*",
+        "files": [{ "name": "", "content": program, "encoding": "utf8" }],
+        "stdin": "",
+        "compile_timeout": 10000,
+        "run_timeout": 3000,
+        "compile_memory_limit": -1,
+        "run_memory_limit": -1,
+        "args": [serde_json::to_string(history).unwrap(), serde_json::to_string(&storage).unwrap()],
+    });
+    let response = async {
+        reqwest::Client::new()
+            .post(endpoint)
+            .json(&request)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<PistonResponse>()
+            .await
+    }
+    .await;
+
+    match response {
         Ok(response) => {
             println!("Language: {}", response.language);
             println!("Version: {}", response.version);
@@ -462,5 +504,75 @@ impl Tournament {
             }
         }
         scores
+    }
+}
+
+#[cfg(test)]
+mod piston_tests {
+    use std::io::{Read, Write};
+
+    #[test]
+    fn sends_piston_protocol_and_reads_action_and_storage() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/execute", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let body = loop {
+                let mut chunk = [0; 4096];
+                let count = stream.read(&mut chunk).unwrap();
+                assert_ne!(count, 0);
+                request.extend_from_slice(&chunk[..count]);
+                if let Some(end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&request[..end]);
+                    assert!(headers.starts_with("POST /execute HTTP/1.1"));
+                    let length: usize = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse().unwrap())
+                        })
+                        .unwrap();
+                    if request.len() >= end + 4 + length {
+                        break serde_json::from_slice::<serde_json::Value>(
+                            &request[end + 4..end + 4 + length],
+                        )
+                        .unwrap();
+                    }
+                }
+            };
+            assert_eq!(body["language"], "python");
+            assert_eq!(body["files"][0]["content"], "print('action')");
+            assert_eq!(
+                body["args"],
+                serde_json::json!(["[[true,false]]", "\"previous\""])
+            );
+            assert_eq!(body["run_timeout"], 3000);
+            let response = serde_json::json!({
+                "language":"python", "version":"3.12", "compile":null,
+                "run":{"output":"done", "stdout":"{\"action\":true,\"storage\":\"next\"}"}
+            })
+            .to_string();
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", response.len(), response).unwrap();
+        });
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = runtime
+            .block_on(super::run_piston_at(
+                &endpoint,
+                &"python".into(),
+                &"print('action')".into(),
+                &[(true, false)],
+                "previous".into(),
+            ))
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(result, (true, "next".into()));
     }
 }
